@@ -28,7 +28,7 @@ module.exports = function() {
 		reconnect: true,
 		test: false,
 		log: console.log,
-		error: console.error
+		logerror: console.error
 	};
 	let options = default_options;
 	let info = {
@@ -65,6 +65,33 @@ module.exports = function() {
 		if ( !options.APIKEY ) throw 'apiRequest: Invalid API Key';
 		let opt = {
 			url: url,
+			method: method,
+			timeout: options.recvWindow,
+			agent: false,
+			headers: {
+				'User-Agent': userAgent,
+				'Content-type': contentType,
+				'X-MBX-APIKEY': options.APIKEY
+			}
+		};
+		request(opt, function(error, response, body) {
+			if ( !callback ) return;
+
+			if ( error )
+				return callback( error, {} );
+
+			if ( response && response.statusCode !== 200 )
+				return callback( response, {} );
+
+			return callback( null, JSON.parse(body) );
+		});
+	};
+	
+	const marketRequest = function(url, data, callback, method = 'GET') {
+		if ( !data ) data = {};
+		let query = Object.keys(data).reduce(function(a,k){a.push(k+'='+encodeURIComponent(data[k]));return a},[]).join('&');
+		let opt = {
+			url: url+'?'+query,
 			method: method,
 			timeout: options.recvWindow,
 			agent: false,
@@ -152,14 +179,14 @@ LIMIT_MAKER
 		signedRequest(base+endpoint, opt, function(error, response) {
 			if ( !response ) {
 				if ( callback ) callback(error, response);
-				else console.error('Order() error:', error);
+				else options.error('Order() error:'+ error);
 				return;
 			}
 			if ( typeof response.msg !== 'undefined' && response.msg === 'Filter failure: MIN_NOTIONAL' ) {
-				console.error('Order quantity too small. See exchangeInfo() for minimum amounts');
+				options.error('Order quantity too small. See exchangeInfo() for minimum amounts');
 			}
 			if ( callback ) callback(error, response);
-			else options.log(side+'('+symbol+','+quantity+','+price+') ',response);
+			else options.log(side+'('+symbol+','+quantity+','+price+') '+JSON.stringify(response));
 		}, 'POST');
 	};
 	////////////////////////////
@@ -176,7 +203,7 @@ LIMIT_MAKER
 				try {
 					reconnect();
 				} catch ( error ) {
-					console.error('WebSocket reconnect error: '+error.message);
+					options.error('WebSocket reconnect error: '+error.message);
 				}
 			} else options.log('WebSocket connection closed! '+this.endpoint);
 		});
@@ -185,7 +212,7 @@ LIMIT_MAKER
 			try {
 				callback(JSON.parse(data));
 			} catch (error) {
-				console.error('Parse error: '+error.message);
+				options.error('Parse error: '+error.message);
 			}
 		});
 		subscriptions[endpoint] = ws;
@@ -198,7 +225,7 @@ LIMIT_MAKER
 		} else if ( type === 'executionReport' ) {
 			if ( options.execution_callback ) options.execution_callback(data);
 		} else {
-			console.error('Unexpected userData: '+type);
+			options.error('Unexpected userData: '+type);
 		}
 	};
 	const prevDayStreamHandler = function(data, callback) {
@@ -275,8 +302,9 @@ LIMIT_MAKER
 	};
 	const balanceData = function(data) {
 		let balances = {};
+		if ( typeof data === 'undefined' ) return {};
 		if ( typeof data.balances === 'undefined' ) {
-			options.log('balanceData error', data);
+			options.log('balanceData error'+ data);
 			return {};
 		}
 		for ( let obj of data.balances ) {
@@ -383,6 +411,9 @@ LIMIT_MAKER
 		depthVolume: function(symbol) {
 			return depthVolume(symbol);
 		},
+		roundStep: function roundStep(number, stepSize) {
+			return ( (number / stepSize) | 0 ) * stepSize;
+		},
 		percent: function(min, max, width = 100) {
 			return ( min * 0.01 ) / ( max * 0.01 ) * width;
 		},
@@ -413,7 +444,7 @@ LIMIT_MAKER
 					object[price] = cumulative;
 				} else if ( !baseValue ) object[price] = parseFloat(cache[price]);
 				else object[price] = parseFloat((cache[price] * parseFloat(price)).toFixed(8));
-				if ( ++count > max ) break;
+				if ( ++count >= max ) break;
 			}
 			return object;
 		},
@@ -429,7 +460,7 @@ LIMIT_MAKER
 					object[price] = cumulative;
 				} else if ( !baseValue ) object[price] = parseFloat(cache[price]);
 				else object[price] = parseFloat((cache[price] * parseFloat(price)).toFixed(8));
-				if ( ++count > max ) break;
+				if ( ++count >= max ) break;
 			}
 			return object;
 		},
@@ -594,14 +625,25 @@ LIMIT_MAKER
 				if ( callback ) return callback.call(this, error, data, symbol);
 			});
 		},
+		useServerTime: function(callback = false) {
+			apiRequest(base+'v1/time', function(error, response) {
+				info.timeOffset = response.serverTime - new Date().getTime();
+				//console.info("server time set: ", response.serverTime, info.timeOffset);
+				if ( callback ) callback();
+			});
+		},
 		time: function(callback) {
 			apiRequest(base+'v1/time', callback);
 		},
+		aggTrades: function(symbol, options = {}, callback = false) { //fromId startTime endTime limit
+			let parameters = Object.assign({symbol}, options);
+			marketRequest(base+'v1/aggTrades', parameters, callback);
+		},
 		recentTrades: function(symbol, callback, limit = 500) {
-			signedRequest(base+'v1/trades', {symbol:symbol, limit:limit}, callback);
+			marketRequest(base+'v1/trades', {symbol:symbol, limit:limit}, callback);
 		},
 		historicalTrades: function(symbol, callback, limit = 500) {
-			signedRequest(base+'v1/historicalTrades', {symbol:symbol, limit:limit}, callback);
+			marketRequest(base+'v1/historicalTrades', {symbol:symbol, limit:limit}, callback);
 		},
 		// convert chart data to highstock array [timestamp,open,high,low,close]
 		highstock: function(chart, include_volume = false) {
@@ -681,7 +723,7 @@ LIMIT_MAKER
 			terminate: function(endpoint) {
 				let ws = subscriptions[endpoint];
 				if ( !ws ) return;
-				options.log('WebSocket terminated: '+ endpoint);
+				options.log('WebSocket terminated:'+ endpoint);
 				ws.terminate();
 				delete subscriptions[endpoint];
 			},
