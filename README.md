@@ -3,6 +3,10 @@
 
 [![NPM](https://nodei.co/npm/node-binance-api.png?compact=true)](https://npmjs.org/package/node-binance-api)
 
+# Fork
+Makes a simple change: Allows you to repalce console.log by passing functions to options ``log`` and ``logerror``.
+I wont actively maintain this or pull it etc. I just wanted to see how forking works.
+
 # Node Binance API
 This project is designed to help you make your own projects that interact with the [Binance API](https://github.com/binance-exchange/binance-official-api-docs). You can stream candlestick chart data, market depth, or use other advanced features such as setting stop losses and iceberg orders. This project seeks to have complete API coverage including WebSockets.
 
